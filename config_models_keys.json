@@ -1,0 +1,67 @@
+{
+    "interface_language": "Português",
+    "api_keys": {
+        "openai": "",
+        "openrouter": "",
+        "deepseek": "",
+        "gemini": "",
+        "mistral": "",
+        "nvidia": "",
+        "groq": "",
+        "grok": ""
+    },
+    "gdrive_config": {
+        "credentials_json_path": "credentials.json",
+        "glossary_link_or_id": "",
+        "characters_link_or_id": ""
+    },
+    "custom_models": {
+        "openai": [
+            "gpt-4o",
+            "gpt-4o-mini",
+            "gpt-4-turbo"
+        ],
+        "openrouter": [
+            "anthropic/claude-3.5-sonnet",
+            "google/gemini-pro-1.5",
+            "meta-llama/llama-3-70b-instruct"
+        ],
+        "deepseek": [
+            "deepseek-chat",
+            "deepseek-coder"
+        ],
+        "gemini": [
+            "gemini-2.5-flash",
+            "gemini-2.5-pro"
+        ],
+        "mistral": [
+            "mistral-large-latest",
+            "mistral-medium"
+        ],
+        "nvidia": [
+            "nvidia/llama-3.1-nemotron-70b-instruct"
+        ],
+        "groq": [
+            "llama-3.3-70b-versatile",
+            "mixtral-8x7b-32768"
+        ],
+        "grok": [
+            "grok-beta"
+        ],
+        "ollama": [
+            "llama3",
+            "llama3.1",
+            "mistral",
+            "gemma2",
+            "phi3"
+        ]
+    },
+    "base_descriptions": {
+        "glossary": {},
+        "characters": {}
+    },
+    "base_schema_llm": {
+        "provider": "",
+        "model": ""
+    }
+}

@@ -1,0 +1,384 @@
+================================================================================
+PROJETO TRADUTOR INTELIGENTE — GUIA DE CONTEXTO (para humanos e outros MCPs)
+================================================================================
+Data: out/2026
+Raiz: c:\Users\Usuarios\Desktop\projeto\tradutor\ProjetoTradutorInteligente
+
+
+--------------------------------------------------------------------------------
+1. O QUE O PROGRAMA FAZ
+--------------------------------------------------------------------------------
+É uma aplicação desktop (Python + Tkinter, sem servidor web) de TRADUÇÃO
+LITERÁRIA assistida por IA. O usuário cola um texto original (ex.: capítulo de
+novel/web novel em inglês) e o programa executa um PIPELINE MULTI-AGENTE de
+tradução para Português (PT), Espanhol (ES), Japonês (JP), Russo (RU) ou
+Inglês (EN), com:
+
+- Cadeia de agentes configuráveis (ex.: Tradução Inicial -> Polimento
+  Estilístico -> Revisão Editorial), cada um com seu provedor/modelo/system
+  prompt/temperatura. Os agentes são editados na janela "Editar Agente".
+- RAG (busca em base de conhecimento local SQLite) alimentada por planilhas
+  Excel: glossário de termos, fichas de personagens e frases de referência,
+  sincronizáveis do Google Drive.
+- Preferências de narrador/POV (1ª ou 3ª pessoa) aplicadas à tradução.
+- Presets de configuração salvos/carregados (modelos, drives, agentes).
+- Sistema de MÚLTIPLAS CHAVES API por agente com rotação automática e
+  fallback configurável ao errar 429/cota (estratégias: model_first,
+  key_first, keys_only, model_only), além de limites de orçamento de tokens
+  (por execução ou por dia) com fallback para modelo reserva.
+- Salvamento automático da sessão (autosave JSON) e histórico de execuções
+  (inclui qual chave/key_index usada).
+- Interface multilíngue (PT/EN/ES/JP/RU) trocável em tempo de execução —
+  toda a UI e os logs do pipeline usam a função t(chave, idioma) de
+  app_config.py.
+- Janelas secundárias: Config/Chaves & GDrive/Modelos, Editor de Agente,
+  Construtor de RAG. Páginas longas têm rolagem (scroll_helper.py) e os
+  botões de Salvar ficam fixos fora da área rolável.
+
+Fluxo principal: usuário digita texto -> "▶ Executar Tradução" ->
+ExecutionMixin.run_pipeline() monta PipelineConfig -> LiteraryTranslationPipeline
+(translation_pipeline.py) roda cada agente via llm_client.call_llm(), com
+cascata de chaves/fallback em erros 429 -> resultado vai para "Resultado Final"
+e logs para a aba "Logs" -> histórico e tokens registrados.
+
+
+--------------------------------------------------------------------------------
+2. COMO RODAR
+--------------------------------------------------------------------------------
+- Python 3.12 (venv/ incluído no projeto).
+- Dependências: ver requirements.txt (tkinter da stdlib, pandas, openpyxl,
+  requests, google-auth/google-auth-oauthlib/google-api-python-client p/ Drive).
+- Entrada principal: python gui.py  (reexporta TranslationAppGUI de app_ui).
+- Chaves API e configuração persistente: config_models_keys.json.
+- Sessão/agentes salvos: session_autosave.json | Consumo: token_usage.json.
+
+
+--------------------------------------------------------------------------------
+3. ARQUIVO POR ARQUIVO (raiz do projeto)
+--------------------------------------------------------------------------------
+
+--- Núcleo / lógica de tradução ---
+
+app_config.py
+    Configuração global + i18n. Carrega/salva config_models_keys.json
+    (load_persistent_config mescla chaves persistidas SEM apagar campos
+    novos; save_persistent_config). Contém t(key, lang) — dicionário de
+    tradução da interface em 5 idiomas (PT/EN/ES/JP/RU) — e constantes de
+    caminhos (INTERNAL_RAG_DB, LOCAL_CHARACTERS_DB, LOCAL_GLOSSARY_DB...).
+
+models.py
+    Dataclasses de domínio: AgentConfig (nome, prompt, provider, model,
+    temperature, max_tokens, api_keys[], default_key_index,
+    fallback_api_keys[], fallback_default_key_index, fallback_strategy,
+    budget_mode/token_limit/budget_scope, fallback_model...) e
+    PipelineConfig/PipelineResult.
+
+llm_client.py
+    Camada única de chamada aos LLMs. Monta payload e chama as APIs
+    (deepseek, openai, openrouter, anthropic, google/gemini...), aceita o
+    parâmetro api_key explícito (senão usa a chave padrão do provedor),
+    is_rate_limit_error() detecta 429/cota, mask_key() mascara chaves nos
+    logs. Também calcula estimativa/uso de tokens.
+
+translation_pipeline.py
+    O pipeline literário de fato. Tem os helpers _clean_keys, _global_keys,
+    _agent_keys, _stages_for e _call_with_fallback: cascata de tentativa
+    (chave padrão principal -> modelo reserva com chave padrão -> demais
+    chaves principais -> demais chaves reserva) com estratégias
+    model_first/key_first/keys_only/model_only; erros não-429 sobem na
+    hora; orçamento estourado (usage_manager.check) pula direto pro modelo
+    reserva. Monta o prompt com glossário/personagens/frases (RAG), POV e
+    histórico, e devolve steps_history.
+
+knowledge_base.py
+    Gerenciadores SQLite alimentados por Excel: GlossaryManager (dicionário
+    de termos), CharactersManager (fichas de personagens), InternalRAGManager
+    (bases de frases/referência). Sync com reset a partir de Excel e
+    consulta RAG para o pipeline. Os dois primeiros guardam excel_path no
+    sync e injetam a DESCRIÇÃO DA BASE (base_schema) no bloco do prompt via
+    _with_description: texto do usuário como DADO, sempre ANTES das diretivas
+    fixas (GLOSSARY_DIRECTIVE/CHARACTERS_DIRECTIVE), que continuam invioláveis.
+    Personagens: bloco universal em 2 NÍVEIS (get_relevant_characters com
+    source/target_language, pov_mode, narrator_name vindos do pipeline):
+    N1 elenco do trecho + 1 pronome/linha (citado entra p/ NÃO usar errado);
+    N2 ficha integral c/ personalidade SÓ de quem fala/narra/é citado
+    nominalmente. Fallback: nada casou -> elenco compacto de TODOS (sem
+    fichas). Diretiva montada do perfil do idioma-alvo
+    (_build_characters_directive; CHARACTERS_DIRECTIVE virou legado).
+
+lang_profiles.py (NOVO)
+    Perfis por idioma, zero dependências/rede. ORIGEM: get_dicendi (verbos
+    de fala PT/EN/ES p/ atribuição de falante). DESTINO: get_target_profile
+    e target_key (japonês caprichado 「」『』+omissão de 3a pessoa; inglês
+    caprichado " "+3a pessoa obrigatória+I maiúsculo; espanhol/russo
+    enxutos; default genérico p/ língua desconhecida — nunca herda 「」).
+    Pronomes: is_pronoun_header (cabeçalho em 6 línguas), looks_like_
+    pronoun_cell (CJK ou lista multilíngue) e extract_pronoun (forma final:
+    "Atashi (あたし)"->"あたし").
+
+base_schema.py
+    Descrição de como cada base (planilha D1/D2) está organizada. Persistida
+    em config_models_keys.json (base_descriptions) POR BASE e POR HASH DOS
+    CABEÇALHOS (source_hash): editar células não invalida; mudar colunas dá
+    status "stale". Funções: get_description/save_description/clear_description/
+    status/other_labels/has_api_key, _sample_text (cabeçalhos + linhas
+    espalhadas, não só as 3 primeiras) e build_draft (UMA chamada de LLM p/
+    rascunho — NÃO persiste; só o Salvar do popup grava). DESC_MAX_CHARS=600.
+    Popup: gui_windows.BaseDescriptionWindow (escolhe base, contador de
+    caracteres, provedor/modelo dos custom_models já salvos, "Gerar rascunho").
+    Gatilhos: app_ui/layout.py maybe_prompt_base_description abre o popup
+    após sync (drives_presets/gdrive_actions) quando missing/stale; botão
+    "📝 Descrição da Base" (layout_top, i18n base_desc_btn) força a abertura;
+    execution.py só avisa no log (log_base_desc_missing) sem bloquear.
+
+text_utils.py
+    Normalização de texto para busca: _norm (minúsculas/sem acentos,
+    preserva cirílico/japonês), _norm_name (tira pontuação final e títulos
+    PT/EN/ES: "Shiranami Kaoru."->"shiranami kaoru"), _phrase_in (match
+    tolera plural/sufixo e trata CJK sem espaços), _cell_candidates (chaves
+    curtas de célula Excel), _row_matches/_format_row usados pelo
+    knowledge_base. Busca inteligente de personagens: detect_pronoun_columns
+    (colunas de pronome NÃO participam da busca por nome) e find_speakers
+    (atribuição de falante por regex no ORIGINAL: "X:", "disse X", "X said",
+    falas com nome, 1a pessoa->narrador; SEM LLM).
+
+    RAG DE FRASES/VOCABULÁRIO (InternalRAGManager) = APOIO LINGUÍSTICO, não
+    memória de tradução. Busca por relevância (BM25 em text_utils.bm25_rank),
+    sem fallback fixo; sem resultado relevante não injeta nada (modo apoio).
+    Cada base tem configuração OPCIONAL (tabela base_settings no
+    internal_dynamic_rag.db, editada em "⚙️ Configurar uso do banco" no
+    Construtor de RAG): mode ("support" = IA instruída a NÃO copiar/inserir as
+    frases | "classic" = comportamento antigo), prompt_columns (colunas que vão
+    ao prompt; [] = todas), search_columns (colunas da busca; [] = todas),
+    top_k, max_chars, cell_clip, min_word_len, use_stopwords e common_pct
+    (para os limites, 0 = SEM LIMITE, que é o padrão). As colunas das bases
+    continuam LIVRES — nada é obrigatório.
+    Por agente: AgentConfig.use_rag liga/desliga o RAG de frases (glossário e
+    personagens vão sempre). A consulta usa o texto original + o texto já
+    traduzido pelo agente anterior (get_reference_context(..., extra_text)).
+    PERFORMANCE: get_reference_context aceita `cache` (dict por EXECUÇÃO — o
+    pipeline cria um por run): guarda docs + tokenização BM25 e invalida por
+    fingerprint (base, colunas de busca, min_word_len, use_stopwords). Evita
+    refazer pandas.iterrows + tokenizar a base a cada agente (CPU em PC fraco).
+    bm25_rank aceita `doc_tokens` pré-calculado (default None = comportamento
+    antigo; saída idêntica nos dois caminhos).
+
+token_usage.py
+    Uso de tokens por chave/modelo/dia, persistido em token_usage.json;
+    usage_manager.check aplica orçamento (por execução/dia) e informa o
+    pipeline quando um agente estourou o limite.
+
+session_autosave.py
+    Serialização da sessão: build_snapshot/save_snapshot/load_snapshot
+    (janela, idiomas, drives, presets, agentes) para session_autosave.json.
+    agent_to_dict/agent_from_dict (roundtrip completo das chaves:
+    api_keys, fallback_api_keys, estratégia etc.) e histórico de execuções
+    (registra key_index usado).
+
+gdrive_integration.py
+    Autenticação OAuth do Google Drive (credentials.json -> token.pickle) e
+    download_excel_from_gdrive(file_id_ou_link) para sincronizar Excel.
+
+pipeline.py
+    VERSÃO ANTIGA/legada (dataclasses AgentConfig/PipelineConfig antigas +
+    KnowledgeManager SQLite). Mantida por compatibilidade; o código ativo
+
+chunking.py (NOVO)
+    split_into_chunks(texto, max_chars): divide em trechos SEMPRE entre
+    parágrafos (0 = sem divisão, padrão). Prefere cortar logo após separador de
+    cena (---) e nunca no meio de uma troca de falas, se houver alternativa.
+    tail_paragraphs(texto, n): últimos n parágrafos (contexto do trecho anterior).
+    Pipeline: LiteraryTranslationPipeline.run() chama _run_one() por trecho; cada
+    trecho seguinte recebe o CONTEXTO ANTERIOR (original + tradução já feita,
+    SOMENTE LEITURA) no user_prompt; glossário/personagens também buscam nomes
+    nesse contexto. Campos na tela (layout_top): "Máx. caracteres por trecho" e
+    "Parágrafos de contexto" (PipelineConfig.chunk_chars / context_paragraphs;
+    persistidos em session_autosave). AgentConfig.send_original (Editar Agente):
+    False = o agente NÃO recebe o original de novo (economiza tokens).
+
+consistency.py (NOVO)
+    check_pronouns(): SEM LLM, só AVISA no log (log_pron_*). Descobre o falante de
+    cada fala do ORIGINAL (marca de fala, "X ...:" antes da fala, 1a pessoa do
+    narrador e alternância em trocas de 2 pessoas — inferido é sinalizado) e
+    confere se a fala traduzida usa o pronome de 1a pessoa da ficha (coluna
+    detectada por detect_pronoun_columns). Só alvo japonês por enquanto
+    (_FIRST_PERSON_GROUPS). Se nº de falas original != tradução, ignora e avisa
+    (sinal de narração virando fala ou o contrário).
+
+text_utils.py / knowledge_base.py (mudanças)
+    Casamento do glossário: palavra solta de termo composto só vale se for ÚNICA
+    daquele termo na base (build_word_df; estatística da própria planilha, sem
+    lista fixa). Termo completo casa sempre. Mesma regra para personagens
+    (sobrenome comum a 2 fichas não identifica ninguém) e find_speakers.
+    Nomes aninhados ('Haruto' ⊂ 'Saionji Haruto'): aviso no sync do glossário,
+    nota "Obs." no bloco (siga a grafia do ORIGINAL em cada ponto) e a ficha
+    mostra "(no texto aparece como: Haruto)". Parênteses no nome da ficha
+    ('Sayaka(Matadora de elfo)') são descrição: não entram na busca (_name_core).
+
+--- Interface gráfica ---
+
+gui.py
+    Ponto de entrada de compatibilidade: cria tk.Tk() e instancia
+    TranslationAppGUI (importado de app_ui). "python gui.py" roda o app.
+
+app_ui/ (pacote com a GUI recomposta em mixins; substituiu o antigo gui.py
+monolítico — backups gui_backup_monolitico.py e gui_backup_antes_appui.py)
+    __init__.py        Reexporta TranslationAppGUI.
+    app.py             Classe TranslationAppGUI = combinação de todos os
+                       mixins (state + layout + gdrive + narrator + drives +
+                       presets + agents + settings + agent_editor + execution
+                       + session). __init__ chama init_state, create_widgets
+                       e _setup_autosave.
+    state.py           Estado inicial: carrega config persistente, idioma da
+                       UI, lista padrão de agentes (3 agentes default),
+                       InternalRAGManager, janela 1200x850.
+    layout.py          Orquestra create_widgets: build_top + build_pov +
+                       build_agents + build_split; também construtor RAG.
+    layout_top.py      Topo: idioma origem/destino, opções, botão de config.
+    layout_mid.py      Meio: POV/narrador + listbox de agentes (lista ativa).
+    layout_bottom.py   Baixo: "Texto Original" (ScrolledText), botão executar
+                       e notebook "Resultado Final" + "Logs".
+                       ATENÇÃO: usar tkinter.scrolledtext.ScrolledText (barra
+                       nativa). NÃO aplicar scroll_helper.add_text_scrollbar
+                       aqui — causou colapso das caixas (somiam da tela).
+    scroll_helper.py   Helpers de rolagem: make_scrollable_frame (página com
+                       canvas+scrollbar p/ abas e editores; o botão Salvar
+                       fica FORA, no parent), add_text_scrollbar (uso
+                       restrito: teve problema de pack in_= dentro de
+                       PanedWindow/Notebook — evitar), bind_mousewheel
+                       (rodinha do mouse Windows/Linux/Mac).
+    agents_list.py     Atualiza a listbox de agentes (provedor/modelo/temp,
+                       tag de orçamento por dia/execução).
+    agent_editor.py    Janela "Editar Agente": prompt, provedor/modelo,
+                       temperatura, chaves API (Text multiline 1 por linha,
+                       1ª = padrão), chaves reserva, estratégia de fallback,
+                       orçamento de tokens, modelo reserva. Página rolável
+                       (make_scrollable_frame) + footer fixo com "Salvar
+                       Agente". Força fallback_strategy="keys_only" se
+                       model_first/model_only for escolhido sem fallback_model.
+    settings.py        Abre ConfigManagerWindow e reload_persistent_config
+                       (troca idioma da UI em runtime via t()).
+    execution.py       run_pipeline(): valida texto, monta PipelineConfig e
+                       INICIA o LiteraryTranslationPipeline numa THREAD DAEMON
+                       (rede + CPU fora do event loop do Tkinter). A worker só
+                       enfileira mensagens ((log|done|error) em queue.Queue);
+                       _pump_logs (root.after 150ms) drena em LOTE na thread
+                       principal (1 redraw por drenagem — PC fraco), _finish_run
+                       insere resultado/erro, reabilita o botão e mostra o
+                       messagebox. Guard `_pipeline_running` + botão desabilitado
+                       evitam clique duplo; deepcopy dos agentes congela o
+                       estado no momento do clique; _trim_log corta o log acima
+                       de 400k chars (300k mantidos).
+    session.py         Restaura/aplica snapshot da sessão (uma vez após
+                       create_widgets) e autosave silencioso periódico
+                       (build_snapshot/save_snapshot).
+    gdrive_actions.py  Botões de sincronizar glossário/personagens pelo Drive
+                       (download_excel_from_gdrive -> managers). Import do
+                       Drive é opcional com try/except (venv pode faltar).
+    drives_presets.py  Abas de Drives (caminhos dos Excel) e Presets
+                       (salvar/carregar presets de modelos+agentes em
+                       modelos/*.json).
+    narrator.py        Seleção de narrador/personagem (consulta
+                       CharactersManager) e aplicação ao prompt.
+
+gui_windows.py
+    Janelas secundárias:
+    - ConfigManagerWindow: 3 abas ROLÁVEIS (_scrollable_tab) — "Chaves"
+      (Text multiline: 1 chave por linha, 1ª = padrão; chaves globais e de
+      reserva por provedor), "Google Drive & Interface" (idioma da interface,
+      caminhos/IDs do Drive), "Modelos Dinâmicos". Footer fixo com
+      "💾 Salvar" FORA da rolagem.
+    - RAGBuilderWindow: criar/editar bases RAG a partir de planilhas.
+    IMPORTANTE: save_all persiste interface_language + campos GDrive junto
+    com as chaves (regressão já corrigida — não remover esses campos).
+
+
+--- Dados / arquivos de estado (gerados pela UI; não editar à mão) ---
+config_models_keys.json   Config persistente: chaves API globais por provedor
+                          (lista, 1ª = padrão), chaves reserva, idioma da
+                          interface, caminhos/IDs do Google Drive, modelos.
+session_autosave.json     Snapshot da sessão: janela, idiomas, agentes
+                          completos (com chaves/estratégia/orçamento), presets,
+                          Drive e histórico de execuções (com key_index).
+token_usage.json          Contadores de tokens por chave/modelo/dia.
+modelos/*.json            Presets de modelos/agentes salvos pela UI
+                          (ex.: Preset_PT_JP_Sayaka.json).
+baseTraducao/             Obras traduzidas (ex.: caçadora_de_Elfos/JAPONES/
+                          44.json) — saída estruturada por capítulo.
+MM.json                   Dados de estado auxiliar (auto-save).
+
+--- Outros / legado ---
+gui_backup_monolitico.py   Backup do gui.py original gigante (pré-modularização).
+gui_backup_antes_appui.py  Backup imediatamente antes da refactor p/ app_ui.
+pipeline.py                Legado (ver seção núcleo).
+requirements.txt           Dependências do projeto.
+Leia.txt                   Instruções antigas para o usuário.
+venv/                      Ambiente virtual Python 3.12 do projeto.
+testes _teste_*.py          Foram temporários e já foram REMOVIDOS da raiz
+                            (não deixar arquivos de teste lá). Só unittest
+                            nativo/mock, sem framework de teste instalado.
+
+
+--------------------------------------------------------------------------------
+4. CONVENÇÕES E ARMADILHAS IMPORTANTES (leia antes de editar)
+--------------------------------------------------------------------------------
+1. i18n: NUNCA deixe texto fixo na UI nem em logs do pipeline — sempre
+   t("chave", self.ui_lang) e adicione a chave nos 5 idiomas em
+   app_config.py (paridade PT/EN/ES/JP/RU é checada por teste).
+2. GUI: a janela principal é composta por mixins em app_ui/; mudanças em
+   widgets devem respeitar os nomes usados por outros mixins
+   (input_text, output_text, log_text, run_btn, source_lang_combo,
+   pov_combo, agents_listbox, rag_combo, persistent_config, ui_lang...).
+3. Caixas de texto do fundo (Texto Original / Resultado Final / Logs)
+   usam tkinter.scrolledtext.ScrolledText com barra nativa. NÃO aplicar
+   scroll_helper.add_text_scrollbar em widgets dentro de PanedWindow/
+   Notebook — quebra o layout e as caixas somem.
+4. Scroll de páginas/abas: usar scroll_helper.make_scrollable_frame e
+   deixar o botão Salvar FORA da área rolável (footer fixo).
+5. Chaves API: ordem da cascata em translation_pipeline._call_with_fallback;
+   erro não-429 NÃO tenta a próxima chave; modelo reserva sem
+   fallback_api_keys usa as chaves principais; chaves globais do provedor
+   reserva só entram se o agente não tiver chaves nenhuma.
+6. Persistência: qualquer campo novo em AgentConfig precisa ser refletido em
+   session_autosave.agent_to_dict/agent_from_dict (e nos presets de
+   drives_presets) — senão some ao reiniciar.
+7. load_persistent_config MESCLA o arquivo com defaults (não substitui);
+   o save_all da ConfigManagerWindow deve gravar TODOS os campos das abas
+   (chaves + interface_language + gdrive_config).
+8. Orçamento: budget_mode "limited" + usage_manager.check corta e aciona o
+   modelo reserva; limite por execução (per_execution) ou por dia (per_day),
+   contabilizado por key_index em token_usage.json.
+9. Backups gui_backup_*.py são só referência; nada os importa. Não usar
+   pipeline.py (legado) em código novo.
+10. PRINCÍPIO: o programa é para qualquer usuário e NÃO pode impor limites
+   escondidos. Todo limite/filtro é OPÇÃO do usuário, visível na tela, e o
+   padrão é SEM limite (0 = sem limite). Hoje isso vale para: max_tokens da
+   resposta, tempo máximo de espera, raciocínio do modelo e "tentar de novo
+   se cortar" (Editar Agente: AgentConfig.max_tokens/timeout_s/
+   reasoning_effort/truncation_retry) e para os limites/filtros do RAG
+   (⚙️ Configurar uso do banco). Ao adicionar qualquer limite novo: campo na
+   tela + persistência (session_autosave e drives_presets) + padrão sem limite
+   + o log mostra o valor em uso. Quando algo for cortado pela API/modelo, o
+   programa AVISA no log (⚠️ SAÍDA CORTADA) em vez de seguir em silêncio.
+
+================================================================================
+Fim do guia. Por onde começar: gui.py -> app_ui/app.py -> app_ui/execution.py
+-> translation_pipeline.py -> llm_client.py -> gui_windows.py.
+================================================================================
+
+    usa models.py + knowledge_base.py + translation_pipeline.py.
+
+
+--------------------------------------------------------------------------------
+EXTRA OPCIONAL: MODO JANELA PEQUENA, POR AGENTE (out/2026)
+--------------------------------------------------------------------------------
+No "Editar Agente": caixa "Modo janela pequena" + campo "Janela" (4k/8k/16k/... ou nº de tokens).
+DESMARCADO (padrão) = comportamento atual, idêntico (mesmos prompts).
+MARCADO, o programa configura sozinho, SÓ para esse agente:
+  - não reenvia o texto original (ignora send_original);
+  - limita o bloco do RAG de frases (menor entre o teto da base e o do modo);
+  - avisa no log se glossário+fichas passam de 60% da janela ou a chamada não cabe.
+Glossário e fichas NUNCA são cortados. Trecho (chunk) é global: com agentes marcados vale o MENOR entre
+o "Máx. caracteres por trecho" da tela e o calculado pela menor janela; contexto = menor sugerido.
+small_window.py: cálculo puro (parse_window, compute_preset); AgentConfig.small_window/window_tokens
+(persistidos em sessão e presets); knowledge_base.get_reference_context(max_chars_cap=0).

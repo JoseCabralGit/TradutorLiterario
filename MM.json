@@ -1,0 +1,10 @@
+[
+    {
+        "name": "Agente 1: Tradução Inicial",
+        "system_prompt": "Você é um tradutor literário especialista consultando o glossário, fichas e o banco de frases de referência.",
+        "model": "openai/gpt-oss-120b",
+        "temperature": 0.3,
+        "max_tokens": 4000,
+        "provider": "groq"
+    }
+]

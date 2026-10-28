@@ -1,0 +1,47 @@
+================================================================================
+PROJETO: PIPELINE DE TRADUÇÃO LITERÁRIA COM MÚLTIPLOS AGENTES E RAG HÍBRIDO
+================================================================================
+
+1. RESUMO DO PROJETO
+--------------------------------------------------------------------------------
+Este projeto consiste em uma aplicação desktop desenvolvida em Python (utilizando 
+Tkinter para a interface gráfica) voltada para o fluxo automatizado e modular de 
+tradução literária inspirada em arquiteturas de múltiplos agentes (estilo n8n).
+
+O sistema permite configurar um fluxo sequencial onde a saída de um agente serve 
+como entrada para o próximo, permitindo combinar diferentes provedores de IA, 
+modelos e parâmetros de forma totalmente independente.
+
+
+2. PRINCIPAIS FUNCIONALIDADES IMPLEMENTADAS
+--------------------------------------------------------------------------------
+
+A. Arquitetura de Múltiplos Agentes Flexível & Modificável:
+   - Adição, edição e exclusão de agentes diretamente na interface gráfica.
+   - Cada agente possui configurações independentes: Nome, System Prompt, Provedor, 
+     Modelo, Temperatura e Limite de Tokens.
+
+B. Múltiplos Provedores de LLM e Dinâmica de Modelos/Chaves (JSON):
+   - Suporte integrado para OpenAI, OpenRouter, DeepSeek, Gemini, Mistral AI, 
+     NVIDIA NIM, Groq e Grok (xAI).
+   - Gerenciamento persistente em JSON (`config_models_keys.json`) para salvar 
+     chaves de API seguras (`api_keys`) e adicionar/remover modelos dinamicamente.
+
+C. Base de Conhecimento Externa - 2 Drives (Glossário e Personagens):
+   - **Drive 1 (Glossário):** Seleção de planilhas Excel (`.xlsx`) contendo o dicionário 
+     de termos específicos e traduções sugeridas. Inclui mecanismo de reset local 
+     automático (`local_glossary.db`) e busca inteligente com suporte a correspondência 
+     parcial de termos.
+   - **Drive 2 (Personagens):** Seleção de planilhas Excel contendo fichas de personalidade, 
+     descrição e notas de personagens. Inclui reset local automático (`local_characters.db`) 
+     e inteligência de reconhecimento por nome parcial / primeiro nome / apelidos.
+
+D. Banco de Frases de Referência (RAG Interno Customizável):
+   - Construtor visual integrado (`🛠️ Construtor Banco`) para criar bases de RAG 
+     com colunas customizáveis livremente (ex: `Frase_Original`, `Frase_Alvo`, `Contexto_Referencia`).
+   - Atua como uma memória de tradução para enriquecer a naturalidade frasal sem 
+     alterar a voz narrativa original do texto.
+
+E. Interface Gráfica Completa (Tkinter):
+   - Painéis divididos para configurações, gestão de agentes, entrada de texto original, 
+     resultado final traduzido e aba dedicada a logs de execução em tempo real.
